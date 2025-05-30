@@ -8,7 +8,7 @@ export interface AuthResponse {
 export interface Account {
   accountId: string;
   accountNumber: string;
-  accountName: boolean;
+  accountName: string;
   referenceName: string;
   productName: string;
   kycCompliant: boolean;
@@ -16,7 +16,7 @@ export interface Account {
   profileName: string;
 }
 
-export interface AccountBalanceResponse {
+export interface AccountBalance {
   accountId: string;
   currentBalance: number;
   availableBalance: number;
@@ -26,10 +26,79 @@ export interface AccountBalanceResponse {
   currency: string;
 }
 
+export interface AccountBalanceResponse {
+  data: AccountBalance;
+}
+
 export interface AccountResponse {
   data: {
     accounts: Account[];
   };
+}
+
+export interface AccountTransaction {
+  accountId: string;
+  type: string;
+  transactionType: string;
+  status: string;
+  description: string;
+  cardNumber: string | null;
+  postedOrder: number;
+  postingDate: string;
+  valueDate: string;
+  actionDate: string;
+  transactionDate: string;
+  amount: number;
+  runningBalance: number;
+  uuid: string;
+}
+
+export interface Beneficiary {
+  beneficiaryId: string;
+  accountNumber: string;
+  code: string;
+  bank: string;
+  beneficiaryName: string;
+  lastPaymentAmount: string;
+  lastPaymentDate: string;
+  cellNo: string;
+  emailAddress: string;
+  name: string;
+  referenceAccountNumber: string;
+  referenceName: string;
+  categoryId: string;
+  profileId: string;
+  fasterPaymentAllowed: boolean;
+}
+
+export interface BeneficiaryResponse {
+  data: Beneficiary[];
+  links: {
+    self: string;
+  };
+  meta: {
+    totalPages: number;
+  };
+}
+
+export interface AccountTransactionResponse {
+  data: {
+    transactions: AccountTransaction[];
+  };
+}
+
+export interface TransferMultiple {
+  beneficiaryAccountId: string;
+  amount: string;
+  myReference: string;
+  theirReference: string;
+}
+
+export interface PayMultiple {
+  beneficiaryId: string;
+  amount: string;
+  myReference: string;
+  theirReference: string;
 }
 
 export interface Transfer {
