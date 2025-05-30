@@ -1,3 +1,6 @@
+/**
+ * OAuth authentication response from Investec API.
+ */
 export interface AuthResponse {
   access_token: string;
   token_type: string;
@@ -5,6 +8,9 @@ export interface AuthResponse {
   scope: string;
 }
 
+/**
+ * Represents a single Investec account.
+ */
 export interface Account {
   accountId: string;
   accountNumber: string;
@@ -16,6 +22,9 @@ export interface Account {
   profileName: string;
 }
 
+/**
+ * Balance details for a specific account.
+ */
 export interface AccountBalance {
   accountId: string;
   currentBalance: number;
@@ -26,16 +35,25 @@ export interface AccountBalance {
   currency: string;
 }
 
+/**
+ * API response for a single account's balance.
+ */
 export interface AccountBalanceResponse {
   data: AccountBalance;
 }
 
+/**
+ * API response for a list of accounts.
+ */
 export interface AccountResponse {
   data: {
     accounts: Account[];
   };
 }
 
+/**
+ * Represents a single transaction on an account.
+ */
 export interface AccountTransaction {
   accountId: string;
   type: string;
@@ -53,6 +71,9 @@ export interface AccountTransaction {
   uuid: string;
 }
 
+/**
+ * Represents a single beneficiary for payments.
+ */
 export interface Beneficiary {
   beneficiaryId: string;
   accountNumber: string;
@@ -71,6 +92,9 @@ export interface Beneficiary {
   fasterPaymentAllowed: boolean;
 }
 
+/**
+ * API response for a list of beneficiaries.
+ */
 export interface BeneficiaryResponse {
   data: Beneficiary[];
   links: {
@@ -81,12 +105,18 @@ export interface BeneficiaryResponse {
   };
 }
 
+/**
+ * API response for a list of transactions on an account.
+ */
 export interface AccountTransactionResponse {
   data: {
     transactions: AccountTransaction[];
   };
 }
 
+/**
+ * Transfer instruction for multiple transfers.
+ */
 export interface TransferMultiple {
   beneficiaryAccountId: string;
   amount: string;
@@ -94,6 +124,9 @@ export interface TransferMultiple {
   theirReference: string;
 }
 
+/**
+ * Payment instruction for multiple payments.
+ */
 export interface PayMultiple {
   beneficiaryId: string;
   amount: string;
@@ -101,6 +134,9 @@ export interface PayMultiple {
   theirReference: string;
 }
 
+/**
+ * Details of a single transfer result.
+ */
 export interface Transfer {
   PaymentReferenceNumber: string;
   PaymentDate: string;
@@ -110,6 +146,9 @@ export interface Transfer {
   AuthorisationRequired: boolean;
 }
 
+/**
+ * API response for multiple transfer results.
+ */
 export interface TransferResponse {
   data: {
     TransferResponses: Transfer[];
