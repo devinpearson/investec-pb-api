@@ -1,6 +1,6 @@
 {
   "name": "investec-pb-api",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -30,6 +30,10 @@
   "author": "Devin Pearson",
   "license": "MIT",
   "description": "A simple package for interacting with Investec's private banking API",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/devinpearson/investec-pb-api"
+  },
   "dependencies": {
     "node-fetch": "^3.3.2"
   },
