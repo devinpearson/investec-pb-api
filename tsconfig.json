@@ -19,6 +19,6 @@
     "module": "Preserve",
     "noEmit": true
   },
-  "include": ["./src/**/*", "./tests/**/*"],
+  "include": ["./src/**/*", "./tests/**/*", "./examples/**/*"],
   "exclude": ["./dist/**/*"]
 }

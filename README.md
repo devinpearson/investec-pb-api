@@ -274,22 +274,23 @@ import { InvestecApiError } from 'investec-pb-api';
 
 ## Example Usage
 
-A complete example is provided in [`examples/basic-usage.ts`](examples/basic-usage.ts). This script demonstrates how to:
+Runnable examples live in [`examples/`](examples/). See [`examples/README.md`](examples/README.md) for the full list.
 
-- Authenticate with your Investec API credentials
-- Fetch all accounts
-- Fetch balances for the first account
-- Fetch recent transactions for the first account
-- Fetch all beneficiaries
-- Handle errors gracefully
+| Script                      | Purpose                                               |
+| --------------------------- | ----------------------------------------------------- |
+| `npm run example:basic`     | Auth, accounts, balances, transactions, beneficiaries |
+| `npm run example:payments`  | Dry-run / submit a beneficiary payment                |
+| `npm run example:transfers` | Dry-run / submit an account transfer                  |
+| `npm run example:errors`    | Demonstrate `InvestecApiError`                        |
 
-### Running the Example
+### Running the examples
 
 1. **Set your credentials as environment variables** (recommended):
 
    - `INVESTEC_CLIENT_ID`
    - `INVESTEC_CLIENT_SECRET`
    - `INVESTEC_API_KEY`
+   - Optional: `INVESTEC_HOST=https://openapisandbox.investec.com`
 
    Example (macOS/Linux):
 
@@ -299,23 +300,21 @@ A complete example is provided in [`examples/basic-usage.ts`](examples/basic-usa
    export INVESTEC_API_KEY=your_api_key
    ```
 
-2. **Run the example with ts-node** (if installed):
+2. **Run a read-only walkthrough:**
 
    ```sh
-   npx ts-node examples/basic-usage.ts
+   npm run example:basic
    ```
 
-   Or compile and run with Node.js:
+3. **Payments / transfers are dry-run by default.** Set account/beneficiary IDs and an explicit confirm flag to submit:
 
    ```sh
-   npx tsc examples/basic-usage.ts --outDir dist && node dist/examples/basic-usage.js
+   export INVESTEC_ACCOUNT_ID=...
+   export INVESTEC_BENEFICIARY_ID=...
+   CONFIRM_PAYMENT=true npm run example:payments
    ```
 
-3. **Output**
-
-   The script will print your accounts, balances, transactions, and beneficiaries to the console.
-
-> Tip: You can also edit the example to try out other API methods or to use hardcoded credentials for quick testing.
+> Tip: Prefer the sandbox host while experimenting. Amounts are rand strings (e.g. `"1.00"`), not cents.
 
 ---
 

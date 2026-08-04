@@ -15,7 +15,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "local-release": "changeset version && changeset publish",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "example:basic": "tsx examples/basic-usage.ts",
+    "example:payments": "tsx examples/payments.ts",
+    "example:transfers": "tsx examples/transfers.ts",
+    "example:errors": "tsx examples/error-handling.ts"
   },
   "files": [
     "dist"
@@ -47,6 +51,7 @@
     "@vitest/coverage-v8": "^3.2.7",
     "prettier": "3.1.1",
     "tsup": "^8.5.0",
+    "tsx": "^4.23.5",
     "typescript": "^5.8.3",
     "vitest": "^3.1.4"
   },

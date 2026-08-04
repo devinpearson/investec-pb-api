@@ -1,38 +1,96 @@
-// Example usage of the InvestecPbApi package
-// Save this file as examples/basic-usage.ts and run with ts-node or after compiling with tsc
+/**
+ * Read-only walkthrough of the Investec Private Banking API.
+ *
+ * Required env:
+ *   INVESTEC_CLIENT_ID
+ *   INVESTEC_CLIENT_SECRET
+ *   INVESTEC_API_KEY
+ *
+ * Optional env:
+ *   INVESTEC_HOST=https://openapisandbox.investec.com
+ *
+ * Run:
+ *   npm run example:basic
+ */
 
-import { InvestecPbApi } from '../src';
+import { InvestecApiError } from '../src/index.js';
+import { createClientFromEnv } from './create-client.js';
 
 async function main() {
-  // Replace with your actual credentials
-  const clientId = process.env.INVESTEC_CLIENT_ID || '<clientId>';
-  const clientSecret = process.env.INVESTEC_CLIENT_SECRET || '<clientSecret>';
-  const apiKey = process.env.INVESTEC_API_KEY || '<apiKey>';
+  const pb = createClientFromEnv();
 
-  const pb = new InvestecPbApi(clientId, clientSecret, apiKey);
+  console.log('Requesting access token...');
+  const token = await pb.getToken();
+  console.log(`Authenticated (token length: ${token.length})`);
 
-  try {
-    // Fetch accounts
-    const accounts = await pb.getAccounts();
-    console.log('Accounts:', accounts.data.accounts);
+  const accountsResponse = await pb.getAccounts();
+  const accounts = accountsResponse.data.accounts;
+  console.log(`\nAccounts (${accounts.length}):`);
+  for (const account of accounts) {
+    console.log(
+      `  - ${account.accountName} (${account.productName}) [${account.accountId}]`,
+    );
+  }
 
-    // Fetch balances for the first account
-    if (accounts.data.accounts.length > 0) {
-      const accountId = accounts.data.accounts[0].accountId;
-      const balances = await pb.getAccountBalances(accountId);
-      console.log('Balances:', balances.data);
+  const account = accounts[0];
+  if (!account) {
+    console.log('\nNo accounts available; skipping balances and transactions.');
+  } else {
+    const balances = await pb.getAccountBalances(account.accountId);
+    console.log(`\nBalance for ${account.accountName}:`);
+    console.log(
+      `  available: ${balances.data.availableBalance} ${balances.data.currency}`,
+    );
+    console.log(
+      `  current:   ${balances.data.currentBalance} ${balances.data.currency}`,
+    );
 
-      // Fetch recent transactions
-      const transactions = await pb.getAccountTransactions(accountId);
-      console.log('Transactions:', transactions.data.transactions);
+    const toDate = new Date();
+    const fromDate = new Date(toDate);
+    fromDate.setDate(toDate.getDate() - 30);
+    const toIso = toDate.toISOString().slice(0, 10);
+    const fromIso = fromDate.toISOString().slice(0, 10);
+
+    const transactions = await pb.getAccountTransactions(
+      account.accountId,
+      fromIso,
+      toIso,
+    );
+    console.log(
+      `\nTransactions for ${account.accountName} (${fromIso} → ${toIso}): ${transactions.data.transactions.length}`,
+    );
+    for (const tx of transactions.data.transactions.slice(0, 5)) {
+      console.log(
+        `  - ${tx.transactionDate} ${tx.description} ${tx.amount} (${tx.status})`,
+      );
     }
+    if (transactions.data.transactions.length > 5) {
+      console.log('  ...');
+    }
+  }
 
-    // Fetch beneficiaries
-    const beneficiaries = await pb.getBeneficiaries();
-    console.log('Beneficiaries:', beneficiaries.data);
-  } catch (err) {
-    console.error('API error:', err);
+  const beneficiaries = await pb.getBeneficiaries();
+  console.log(`\nBeneficiaries (${beneficiaries.data.length}):`);
+  for (const beneficiary of beneficiaries.data.slice(0, 5)) {
+    console.log(
+      `  - ${beneficiary.beneficiaryName} @ ${beneficiary.bank} [${beneficiary.beneficiaryId}]`,
+    );
+  }
+  if (beneficiaries.data.length > 5) {
+    console.log('  ...');
   }
 }
 
-main();
+main().catch((err) => {
+  if (err instanceof InvestecApiError) {
+    console.error('Investec API error:', {
+      status: err.status,
+      endpoint: err.endpoint,
+      body: err.body,
+      message: err.message,
+    });
+  } else {
+    console.error(err);
+  }
+  process.exitCode = 1;
+});
