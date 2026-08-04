@@ -1,16 +1,18 @@
-import fetch from 'node-fetch';
 import type {
   AuthResponse,
   AccountResponse,
   AccountBalanceResponse,
+  BeneficiaryResponse,
   TransferResponse,
   AccountTransactionResponse,
-} from './index';
-import type {
-  BeneficiaryResponse,
   PayMultiple,
   TransferMultiple,
 } from './types';
+import { InvestecApiError } from './errors';
+
+/** Refresh tokens this many seconds before actual expiry. */
+const TOKEN_EXPIRY_SKEW_SECONDS = 60;
+const REQUEST_TIMEOUT_MS = 30_000;
 
 const createEndpoint = (host: string, path: string) =>
   new URL(path, host).toString();
@@ -24,12 +26,13 @@ const createEndpoint = (host: string, path: string) =>
  * const accounts = await api.getAccounts();
  */
 export class InvestecPbApi {
-  host!: string;
-  clientId!: string;
-  clientSecret!: string;
-  apiKey!: string;
-  token!: string;
-  expiresIn!: Date;
+  private readonly host: string;
+  private readonly clientId: string;
+  private readonly clientSecret: string;
+  private readonly apiKey: string;
+  private token: string | undefined;
+  private expiresIn: Date = new Date(0);
+  private refreshPromise: Promise<string> | null = null;
 
   /**
    * Create a new InvestecPbApi instance.
@@ -48,36 +51,43 @@ export class InvestecPbApi {
     this.apiKey = apiKey;
     this.clientId = clientId;
     this.clientSecret = clientSecret;
-    this.expiresIn = new Date();
   }
 
   /**
    * Get a valid OAuth token, refreshing if necessary.
+   * Concurrent callers share a single in-flight refresh.
    * @returns Access token string
    */
   async getToken(): Promise<string> {
-    const now = new Date();
-    if (this.token) {
-      if (now.getTime() < this.expiresIn.getTime()) {
-        return this.token;
-      }
+    const now = Date.now();
+    if (this.token && now < this.expiresIn.getTime()) {
+      return this.token;
     }
 
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.refreshAccessToken().finally(() => {
+        this.refreshPromise = null;
+      });
+    }
+
+    return this.refreshPromise;
+  }
+
+  private async refreshAccessToken(): Promise<string> {
     const result = await this.getAccessToken();
-    now.setSeconds(now.getSeconds() + result.expires_in);
-    this.expiresIn = now;
     return result.access_token;
   }
 
   /**
    * Request a new OAuth access token from Investec.
    * @returns AuthResponse object
-   * @throws Error if authentication fails
+   * @throws InvestecApiError if authentication fails
    */
   async getAccessToken(): Promise<AuthResponse> {
     const endpoint = createEndpoint(this.host, `/identity/v2/oauth2/token`);
     const response = await fetch(endpoint, {
       method: 'POST',
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         Authorization:
           'Basic ' +
@@ -89,17 +99,17 @@ export class InvestecPbApi {
       },
       body: 'grant_type=client_credentials',
     });
-    // console.log(response.status);
-    if (response.status !== 200) {
-      throw new Error(response.statusText);
+
+    if (!response.ok) {
+      throw await this.toApiError(response, endpoint);
     }
+
     const result = (await response.json()) as AuthResponse;
-
-    // if (!result.scope.includes('cards')) {
-    //   throw new Error('You require the cards scope to use this tool');
-    // }
-
     this.token = result.access_token;
+    this.expiresIn = new Date(
+      Date.now() +
+        Math.max(result.expires_in - TOKEN_EXPIRY_SKEW_SECONDS, 0) * 1000,
+    );
     return result;
   }
 
@@ -119,16 +129,12 @@ export class InvestecPbApi {
     }
     const endpoint = createEndpoint(
       this.host,
-      `/za//pb/v1/accounts/${encodeURIComponent(accountId)}/transfermultiple`,
+      `/za/pb/v1/accounts/${encodeURIComponent(accountId)}/transfermultiple`,
     );
-    const token = this.token || (await this.getToken());
-    if (!Array.isArray(transfers)) {
-      transfers = [transfers];
-    }
     const payload = {
-      transferList: transfers,
+      transferList: Array.isArray(transfers) ? transfers : [transfers],
     };
-    return fetchPost<TransferResponse>(endpoint, token, payload);
+    return this.fetchPost<TransferResponse>(endpoint, payload);
   }
 
   /**
@@ -147,16 +153,12 @@ export class InvestecPbApi {
     }
     const endpoint = createEndpoint(
       this.host,
-      `/za//pb/v1/accounts/${encodeURIComponent(accountId)}/paymultiple`,
+      `/za/pb/v1/accounts/${encodeURIComponent(accountId)}/paymultiple`,
     );
-    const token = this.token || (await this.getToken());
-    if (!Array.isArray(payments)) {
-      payments = [payments];
-    }
     const payload = {
-      paymentList: payments,
+      paymentList: Array.isArray(payments) ? payments : [payments],
     };
-    return fetchPost<TransferResponse>(endpoint, token, payload);
+    return this.fetchPost<TransferResponse>(endpoint, payload);
   }
 
   /**
@@ -168,8 +170,7 @@ export class InvestecPbApi {
       this.host,
       `/za/pb/v1/accounts/beneficiaries`,
     );
-    const token = this.token || (await this.getToken());
-    return fetchGet<BeneficiaryResponse>(endpoint, token);
+    return this.fetchGet<BeneficiaryResponse>(endpoint);
   }
 
   /**
@@ -178,8 +179,7 @@ export class InvestecPbApi {
    */
   async getAccounts(): Promise<AccountResponse> {
     const endpoint = createEndpoint(this.host, `/za/pb/v1/accounts`);
-    const token = this.token || (await this.getToken());
-    return fetchGet<AccountResponse>(endpoint, token);
+    return this.fetchGet<AccountResponse>(endpoint);
   }
 
   /**
@@ -196,8 +196,7 @@ export class InvestecPbApi {
       this.host,
       `/za/pb/v1/accounts/${encodeURIComponent(accountId)}/balance`,
     );
-    const token = this.token || (await this.getToken());
-    return fetchGet<AccountBalanceResponse>(endpoint, token);
+    return this.fetchGet<AccountBalanceResponse>(endpoint);
   }
 
   /**
@@ -229,59 +228,75 @@ export class InvestecPbApi {
       url += `?${params.toString()}`;
     }
     const endpoint = createEndpoint(this.host, url);
-    const token = this.token || (await this.getToken());
-    return fetchGet<AccountTransactionResponse>(endpoint, token);
+    return this.fetchGet<AccountTransactionResponse>(endpoint);
   }
-}
 
-/**
- * Internal helper for GET requests with authentication.
- * @param endpoint Full URL
- * @param token Bearer token
- * @returns Parsed JSON response
- * @throws Error if request fails
- */
-async function fetchGet<T>(endpoint: string, token: string) {
-  const response = await fetch(endpoint, {
-    method: 'GET',
-    signal: AbortSignal.timeout(30000),
-    headers: {
-      Authorization: 'Bearer ' + token,
-      'content-type': 'application/json',
-    },
-  });
-  if (response.status !== 200) {
-    if (response.status === 404) {
-      throw new Error('Card not found');
-    }
-    throw new Error(response.statusText);
+  private async fetchGet<T>(endpoint: string): Promise<T> {
+    return this.authorizedRequest<T>(endpoint, { method: 'GET' });
   }
-  return (await response.json()) as T;
-}
 
-/**
- * Internal helper for POST requests with authentication.
- * @param endpoint Full URL
- * @param token Bearer token
- * @param body Request payload
- * @returns Parsed JSON response
- * @throws Error if request fails
- */
-async function fetchPost<T>(endpoint: string, token: string, body: object) {
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    signal: AbortSignal.timeout(30000),
-    headers: {
-      Authorization: 'Bearer ' + token,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  if (response.status !== 200) {
-    if (response.status === 404) {
-      throw new Error('Card not found');
-    }
-    throw new Error(response.statusText);
+  private async fetchPost<T>(endpoint: string, body: object): Promise<T> {
+    return this.authorizedRequest<T>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
   }
-  return (await response.json()) as T;
+
+  private async authorizedRequest<T>(
+    endpoint: string,
+    init: RequestInit,
+  ): Promise<T> {
+    const response = await this.sendAuthorized(endpoint, init);
+    if (response.status === 401) {
+      this.invalidateToken();
+      const retry = await this.sendAuthorized(endpoint, init);
+      if (!retry.ok) {
+        throw await this.toApiError(retry, endpoint);
+      }
+      return (await retry.json()) as T;
+    }
+    if (!response.ok) {
+      throw await this.toApiError(response, endpoint);
+    }
+    return (await response.json()) as T;
+  }
+
+  private async sendAuthorized(
+    endpoint: string,
+    init: RequestInit,
+  ): Promise<Response> {
+    const token = await this.getToken();
+    return fetch(endpoint, {
+      ...init,
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        ...(init.headers ?? {}),
+      },
+    });
+  }
+
+  private invalidateToken(): void {
+    this.token = undefined;
+    this.expiresIn = new Date(0);
+  }
+
+  private async toApiError(
+    response: Response,
+    endpoint: string,
+  ): Promise<InvestecApiError> {
+    let body: string | undefined;
+    try {
+      body = await response.text();
+    } catch {
+      body = undefined;
+    }
+    return new InvestecApiError(
+      response.status,
+      endpoint,
+      response.statusText,
+      body,
+    );
+  }
 }

@@ -9,6 +9,17 @@ export interface AuthResponse {
 }
 
 /**
+ * Shared pagination / self-link envelope fields returned by many endpoints.
+ */
+export interface ApiLinks {
+  self: string;
+}
+
+export interface ApiMeta {
+  totalPages: number;
+}
+
+/**
  * Represents a single Investec account.
  */
 export interface Account {
@@ -40,6 +51,8 @@ export interface AccountBalance {
  */
 export interface AccountBalanceResponse {
   data: AccountBalance;
+  links?: ApiLinks;
+  meta?: ApiMeta;
 }
 
 /**
@@ -49,6 +62,8 @@ export interface AccountResponse {
   data: {
     accounts: Account[];
   };
+  links?: ApiLinks;
+  meta?: ApiMeta;
 }
 
 /**
@@ -97,12 +112,8 @@ export interface Beneficiary {
  */
 export interface BeneficiaryResponse {
   data: Beneficiary[];
-  links: {
-    self: string;
-  };
-  meta: {
-    totalPages: number;
-  };
+  links: ApiLinks;
+  meta: ApiMeta;
 }
 
 /**
@@ -112,20 +123,26 @@ export interface AccountTransactionResponse {
   data: {
     transactions: AccountTransaction[];
   };
+  links?: ApiLinks;
+  meta?: ApiMeta;
 }
 
 /**
  * Transfer instruction for multiple transfers.
+ * Amounts are rand strings (e.g. "100.00"), not cents.
  */
 export interface TransferMultiple {
   beneficiaryAccountId: string;
   amount: string;
   myReference: string;
   theirReference: string;
+  /** Optional profile ID when transferring across profiles. */
+  profileId?: string;
 }
 
 /**
  * Payment instruction for multiple payments.
+ * Amounts are rand strings (e.g. "100.00"), not cents.
  */
 export interface PayMultiple {
   beneficiaryId: string;
@@ -144,6 +161,7 @@ export interface Transfer {
   BeneficiaryName: string;
   BeneficiaryAccountId: string;
   AuthorisationRequired: boolean;
+  ErrorMessage?: string;
 }
 
 /**
@@ -153,4 +171,6 @@ export interface TransferResponse {
   data: {
     TransferResponses: Transfer[];
   };
+  links?: ApiLinks;
+  meta?: ApiMeta;
 }

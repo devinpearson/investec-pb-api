@@ -36,6 +36,14 @@ npm install investec-pb-api
 import { InvestecPbApi } from 'investec-pb-api';
 
 const pb = new InvestecPbApi('<clientId>', '<clientSecret>', '<apiKey>');
+
+// Optional: use the Investec sandbox host
+// const pb = new InvestecPbApi(
+//   '<clientId>',
+//   '<clientSecret>',
+//   '<apiKey>',
+//   'https://openapisandbox.investec.com',
+// );
 ```
 
 ### Fetch Accounts
@@ -79,6 +87,21 @@ const paymentResult = await pb.payMultiple(accountId, payments);
 console.log(paymentResult.data.TransferResponses);
 ```
 
+### Make Multiple Transfers
+
+```typescript
+const transfers = [
+  {
+    beneficiaryAccountId: '987654321',
+    amount: '50.00',
+    myReference: 'Savings',
+    theirReference: 'Transfer',
+  },
+];
+const transferResult = await pb.transferMultiple(accountId, transfers);
+console.log(transferResult.data.TransferResponses);
+```
+
 ### Get Beneficiaries
 
 ```typescript
@@ -92,13 +115,19 @@ All methods are fully typed. See the [src/types.ts](src/types.ts) file for detai
 
 ### Error Handling
 
-All methods throw errors if required parameters are missing or if the API returns an error. Use try/catch to handle errors:
+API failures throw `InvestecApiError` with `status`, `endpoint`, and optional `body`. Validation failures throw a plain `Error`. Use try/catch to handle errors:
 
 ```typescript
+import { InvestecApiError } from 'investec-pb-api';
+
 try {
   const accounts = await pb.getAccounts();
 } catch (err) {
-  console.error('API error:', err);
+  if (err instanceof InvestecApiError) {
+    console.error(err.status, err.endpoint, err.body);
+  } else {
+    console.error('API error:', err);
+  }
 }
 ```
 
@@ -232,7 +261,9 @@ import type {
   Account,
   AccountResponse,
   AccountTransaction,
+  PayMultiple,
 } from 'investec-pb-api';
+import { InvestecApiError } from 'investec-pb-api';
 ```
 
 ## Troubleshooting

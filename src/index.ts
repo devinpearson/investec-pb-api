@@ -1,5 +1,6 @@
 export type {
   AuthResponse,
+  Account,
   AccountResponse,
   AccountBalance,
   AccountBalanceResponse,
@@ -8,10 +9,12 @@ export type {
   TransferResponse,
   Transfer,
   TransferMultiple,
+  PayMultiple,
   AccountTransactionResponse,
   AccountTransaction,
+  ApiLinks,
+  ApiMeta,
 } from './types';
 
-// Ensure the file './investec-pb-api.ts' exists in the same directory.
-// If the file is missing, create it or update the import path accordingly.
+export { InvestecApiError } from './errors';
 export { InvestecPbApi } from './investec-pb-api';
