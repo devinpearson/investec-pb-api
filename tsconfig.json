@@ -19,8 +19,6 @@
     "module": "Preserve",
     "noEmit": true
   },
-  "include": ["./src/**/*"],
-  "exclude": [
-    "./dist/**/*" // This is what fixed it!
-  ]
+  "include": ["./src/**/*", "./tests/**/*", "./examples/**/*"],
+  "exclude": ["./dist/**/*"]
 }
