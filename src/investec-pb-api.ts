@@ -1,14 +1,14 @@
+import { InvestecApiError } from './errors';
 import type {
-  AuthResponse,
-  AccountResponse,
   AccountBalanceResponse,
-  BeneficiaryResponse,
-  TransferResponse,
+  AccountResponse,
   AccountTransactionResponse,
+  AuthResponse,
+  BeneficiaryResponse,
   PayMultiple,
   TransferMultiple,
+  TransferResponse,
 } from './types';
-import { InvestecApiError } from './errors';
 
 /** Refresh tokens this many seconds before actual expiry. */
 const TOKEN_EXPIRY_SKEW_SECONDS = 60;
@@ -91,7 +91,7 @@ export class InvestecPbApi {
       headers: {
         Authorization:
           'Basic ' +
-          Buffer.from(this.clientId + ':' + this.clientSecret).toString(
+          Buffer.from(`${this.clientId}:${this.clientSecret}`).toString(
             'base64',
           ),
         'x-api-key': this.apiKey,

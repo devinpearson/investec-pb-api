@@ -28,3 +28,59 @@ jobs:
       - run: npm ci
       - run: npm run ci
       - run: npm test
+
+  integration:
+    name: Integration (programmable-banking-sim)
+    runs-on: ubuntu-latest
+    env:
+      SIM_PORT: 3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: devinpearson/programmable-banking-sim
+          path: programmable-banking-sim
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            programmable-banking-sim/package-lock.json
+      - name: Install simulator
+        working-directory: programmable-banking-sim
+        run: npm ci
+      - name: Start simulator
+        working-directory: programmable-banking-sim
+        run: |
+          PORT=$SIM_PORT nohup npx tsx ./src/index.ts --tsconfig ./tsconfig.json > ../sim.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -sf "http://localhost:$SIM_PORT/health" && exit 0
+            sleep 1
+          done
+          echo "Simulator did not become healthy"; cat ../sim.log; exit 1
+      - run: npm ci
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          PB_SIM_URL: http://localhost:${{ env.SIM_PORT }}
+      - name: Simulator log
+        if: failure()
+        run: cat sim.log
+
+  mutation:
+    name: Mutation testing (Stryker)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run test:mutation
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mutation-report
+          path: reports/mutation/

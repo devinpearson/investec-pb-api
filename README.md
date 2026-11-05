@@ -318,6 +318,38 @@ Runnable examples live in [`examples/`](examples/). See [`examples/README.md`](e
 
 ---
 
+## Development
+
+| Command                    | What it does                                             |
+| -------------------------- | -------------------------------------------------------- |
+| `npm test`                 | Unit tests (mocked `fetch`)                              |
+| `npm run test:integration` | End-to-end tests against `programmable-banking-sim`      |
+| `npm run test:mutation`    | Stryker mutation testing; report in `reports/mutation/`  |
+| `npm run lint`             | Biome lint + format check (`npm run lint:fix` to fix)    |
+| `npm run ci`               | Build, typecheck, lint and check package exports         |
+
+### Integration tests
+
+The integration suite runs the client against [programmable-banking-sim](https://github.com/devinpearson/programmable-banking-sim).
+It is skipped unless `PB_SIM_URL` is set:
+
+```bash
+# in programmable-banking-sim
+PORT=3000 npm run dev
+```
+
+```bash
+PB_SIM_URL=http://localhost:3000 npm run test:integration
+```
+
+The default credentials are the simulator's seeded sandbox values; override
+them with `PB_SIM_CLIENT_ID`, `PB_SIM_CLIENT_SECRET` and `PB_SIM_API_KEY`.
+The tests create real transactions in the simulator's database (descriptions
+start with `it-`), so run them against a throwaway copy if you care about its
+state. Two tests are marked `test.fails` because the simulator's beneficiary
+and transfer responses don't match the real API yet; flip them to `test` once
+the simulator is fixed.
+
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details.
