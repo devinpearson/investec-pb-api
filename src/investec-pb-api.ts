@@ -1,11 +1,20 @@
 import { InvestecApiError } from './errors';
 import type {
   AccountBalanceResponse,
+  AccountDocumentResponse,
   AccountResponse,
+  AccountTransaction,
   AccountTransactionResponse,
+  AccountTransactionWithPending,
+  AuthorisationSetupDetailsResponse,
   AuthResponse,
+  BeneficiaryCategoryResponse,
   BeneficiaryResponse,
   PayMultiple,
+  PendingTransactionResponse,
+  ProfileAccountResponse,
+  ProfileResponse,
+  TransactionQuery,
   TransferMultiple,
   TransferResponse,
 } from './types';
@@ -201,34 +210,219 @@ export class InvestecPbApi {
 
   /**
    * Get transactions for a specific account, optionally filtered by date and type.
-   * @param accountId The account ID
-   * @param fromDate Optional start date (YYYY-MM-DD)
-   * @param toDate Optional end date (YYYY-MM-DD)
-   * @param transactionType Optional transaction type filter
-   * @returns AccountTransactionResponse
+   *
+   * Accepts either positional filters or a `TransactionQuery` object. Only the
+   * object form supports `includePending`; with `includePending: true` the
+   * result may contain pending items whose posting fields are null.
+   *
+   * @example
+   * await api.getAccountTransactions(id, '2024-01-01', '2024-01-31');
+   * await api.getAccountTransactions(id, { fromDate: '2024-01-01', includePending: true });
    * @throws Error if accountId is missing or API call fails
    */
   async getAccountTransactions(
     accountId: string,
-    fromDate: string | null = null,
+    query: TransactionQuery & { includePending: true },
+  ): Promise<AccountTransactionResponse<AccountTransactionWithPending>>;
+  async getAccountTransactions(
+    accountId: string,
+    query?: TransactionQuery,
+  ): Promise<AccountTransactionResponse>;
+  async getAccountTransactions(
+    accountId: string,
+    fromDate?: string | null,
+    toDate?: string | null,
+    transactionType?: string | null,
+  ): Promise<AccountTransactionResponse>;
+  async getAccountTransactions(
+    accountId: string,
+    queryOrFromDate: TransactionQuery | string | null = null,
     toDate: string | null = null,
     transactionType: string | null = null,
-  ): Promise<AccountTransactionResponse> {
+  ): Promise<
+    AccountTransactionResponse<
+      AccountTransaction | AccountTransactionWithPending
+    >
+  > {
     if (!accountId) {
       throw new Error('Missing required parameters');
     }
-    let url = `/za/pb/v1/accounts/${encodeURIComponent(
-      accountId,
-    )}/transactions`;
+    const query: TransactionQuery =
+      queryOrFromDate !== null && typeof queryOrFromDate === 'object'
+        ? queryOrFromDate
+        : { fromDate: queryOrFromDate, toDate, transactionType };
     const params = new URLSearchParams();
-    if (fromDate) params.append('fromDate', fromDate);
-    if (toDate) params.append('toDate', toDate);
-    if (transactionType) params.append('transactionType', transactionType);
-    if ([fromDate, toDate, transactionType].some(Boolean)) {
-      url += `?${params.toString()}`;
+    if (query.fromDate) params.append('fromDate', query.fromDate);
+    if (query.toDate) params.append('toDate', query.toDate);
+    if (query.transactionType) {
+      params.append('transactionType', query.transactionType);
     }
-    const endpoint = createEndpoint(this.host, url);
-    return this.fetchGet<AccountTransactionResponse>(endpoint);
+    if (query.includePending) params.append('includePending', 'true');
+    return this.fetchGet(
+      this.accountEndpoint(accountId, '/transactions', params),
+    );
+  }
+
+  /**
+   * Get pending (authorised but not yet posted) transactions for an account.
+   * @param accountId The account ID
+   * @throws Error if accountId is missing or API call fails
+   */
+  async getPendingTransactions(
+    accountId: string,
+  ): Promise<PendingTransactionResponse> {
+    if (!accountId) {
+      throw new Error('Missing required parameters');
+    }
+    return this.fetchGet(
+      this.accountEndpoint(accountId, '/pending-transactions'),
+    );
+  }
+
+  /**
+   * List the profiles the authenticated user has access to.
+   */
+  async getProfiles(): Promise<ProfileResponse> {
+    return this.fetchGet(createEndpoint(this.host, '/za/pb/v1/profiles'));
+  }
+
+  /**
+   * List the accounts in a profile.
+   * @param profileId The profile ID (see `getProfiles`)
+   * @throws Error if profileId is missing or API call fails
+   */
+  async getProfileAccounts(profileId: string): Promise<ProfileAccountResponse> {
+    if (!profileId) {
+      throw new Error('Missing required parameters');
+    }
+    return this.fetchGet(this.profileEndpoint(profileId, '/accounts'));
+  }
+
+  /**
+   * List the beneficiaries that can be paid from an account in a profile.
+   * @param profileId The profile ID
+   * @param accountId The account ID
+   * @throws Error if either ID is missing or API call fails
+   */
+  async getProfileBeneficiaries(
+    profileId: string,
+    accountId: string,
+  ): Promise<BeneficiaryResponse> {
+    if (!profileId || !accountId) {
+      throw new Error('Missing required parameters');
+    }
+    return this.fetchGet(
+      this.profileEndpoint(
+        profileId,
+        `/accounts/${encodeURIComponent(accountId)}/beneficiaries`,
+      ),
+    );
+  }
+
+  /**
+   * Get who must authorise payments from an account in a profile, and within
+   * which periods.
+   * @param profileId The profile ID
+   * @param accountId The account ID
+   * @throws Error if either ID is missing or API call fails
+   */
+  async getAuthorisationSetupDetails(
+    profileId: string,
+    accountId: string,
+  ): Promise<AuthorisationSetupDetailsResponse> {
+    if (!profileId || !accountId) {
+      throw new Error('Missing required parameters');
+    }
+    return this.fetchGet(
+      this.profileEndpoint(
+        profileId,
+        `/accounts/${encodeURIComponent(accountId)}/authorisationsetupdetails`,
+      ),
+    );
+  }
+
+  /**
+   * List the beneficiary categories.
+   */
+  async getBeneficiaryCategories(): Promise<BeneficiaryCategoryResponse> {
+    return this.fetchGet(
+      createEndpoint(this.host, '/za/pb/v1/accounts/beneficiarycategories'),
+    );
+  }
+
+  /**
+   * List the documents (statements, tax certificates, ...) for an account
+   * within a date range. Both dates are required by the API.
+   * @param accountId The account ID
+   * @param fromDate Start date (YYYY-MM-DD)
+   * @param toDate End date (YYYY-MM-DD)
+   * @throws Error if a parameter is missing or API call fails
+   */
+  async getDocuments(
+    accountId: string,
+    fromDate: string,
+    toDate: string,
+  ): Promise<AccountDocumentResponse> {
+    if (!accountId || !fromDate || !toDate) {
+      throw new Error('Missing required parameters');
+    }
+    return this.fetchGet(
+      this.accountEndpoint(
+        accountId,
+        '/documents',
+        new URLSearchParams({ fromDate, toDate }),
+      ),
+    );
+  }
+
+  /**
+   * Download one document as raw bytes (a PDF for statements).
+   * Use the `documentType` and `documentDate` returned by `getDocuments`.
+   *
+   * @example
+   * const pdf = await api.getDocument(id, 'Statement', '2025-06-06');
+   * await writeFile('statement.pdf', new Uint8Array(pdf));
+   * @throws Error if a parameter is missing or API call fails
+   */
+  async getDocument(
+    accountId: string,
+    documentType: string,
+    documentDate: string,
+  ): Promise<ArrayBuffer> {
+    if (!accountId || !documentType || !documentDate) {
+      throw new Error('Missing required parameters');
+    }
+    const endpoint = this.accountEndpoint(
+      accountId,
+      `/document/${encodeURIComponent(documentType)}/${encodeURIComponent(
+        documentDate,
+      )}`,
+    );
+    const response = await this.authorizedFetch(endpoint, {
+      method: 'GET',
+      headers: { accept: '*/*' },
+    });
+    return response.arrayBuffer();
+  }
+
+  private accountEndpoint(
+    accountId: string,
+    suffix: string,
+    params?: URLSearchParams,
+  ): string {
+    const qs = params?.toString();
+    const query = qs ? `?${qs}` : '';
+    return createEndpoint(
+      this.host,
+      `/za/pb/v1/accounts/${encodeURIComponent(accountId)}${suffix}${query}`,
+    );
+  }
+
+  private profileEndpoint(profileId: string, suffix: string): string {
+    return createEndpoint(
+      this.host,
+      `/za/pb/v1/profiles/${encodeURIComponent(profileId)}${suffix}`,
+    );
   }
 
   private async fetchGet<T>(endpoint: string): Promise<T> {
@@ -246,19 +440,24 @@ export class InvestecPbApi {
     endpoint: string,
     init: RequestInit,
   ): Promise<T> {
-    const response = await this.sendAuthorized(endpoint, init);
+    const response = await this.authorizedFetch(endpoint, init);
+    return (await response.json()) as T;
+  }
+
+  /** Sends an authorized request, retrying once on 401; throws on non-2xx. */
+  private async authorizedFetch(
+    endpoint: string,
+    init: RequestInit,
+  ): Promise<Response> {
+    let response = await this.sendAuthorized(endpoint, init);
     if (response.status === 401) {
       this.invalidateToken();
-      const retry = await this.sendAuthorized(endpoint, init);
-      if (!retry.ok) {
-        throw await this.toApiError(retry, endpoint);
-      }
-      return (await retry.json()) as T;
+      response = await this.sendAuthorized(endpoint, init);
     }
     if (!response.ok) {
       throw await this.toApiError(response, endpoint);
     }
-    return (await response.json()) as T;
+    return response;
   }
 
   private async sendAuthorized(

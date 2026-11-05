@@ -17,7 +17,10 @@ This package was created to support the investec-ipb command line application, b
 - OAuth2 authentication (client credentials)
 - Fetch accounts, balances, and transactions
 - Make payments and transfers (single or multiple)
-- Manage beneficiaries
+- List beneficiaries and beneficiary categories
+- Profiles, profile accounts and payment authorisation setup
+- Pending transactions
+- List and download statements and other account documents
 - Fully typed responses and request payloads
 
 ## Installation
@@ -107,6 +110,50 @@ console.log(transferResult.data.TransferResponses);
 ```typescript
 const beneficiaries = await pb.getBeneficiaries();
 console.log(beneficiaries.data);
+```
+
+### Pending Transactions
+
+```typescript
+// Only the pending (authorised, not yet posted) items
+const pending = await pb.getPendingTransactions(accountId);
+
+// Posted and pending together; pending items have null posting fields
+const all = await pb.getAccountTransactions(accountId, {
+  fromDate: '2024-01-01',
+  includePending: true,
+});
+```
+
+### Profiles
+
+```typescript
+const profiles = await pb.getProfiles();
+const profileId = profiles.data.find((p) => p.defaultProfile)!.profileId;
+
+const accounts = await pb.getProfileAccounts(profileId);
+const beneficiaries = await pb.getProfileBeneficiaries(profileId, accountId);
+const authorisation = await pb.getAuthorisationSetupDetails(
+  profileId,
+  accountId,
+);
+```
+
+### Beneficiary Categories
+
+```typescript
+const categories = await pb.getBeneficiaryCategories();
+```
+
+### Statements and Documents
+
+```typescript
+import { writeFile } from 'node:fs/promises';
+
+const docs = await pb.getDocuments(accountId, '2024-01-01', '2024-12-31');
+const { documentType, documentDate } = docs.data[0]!;
+const pdf = await pb.getDocument(accountId, documentType, documentDate);
+await writeFile(`${documentType}-${documentDate}.pdf`, new Uint8Array(pdf));
 ```
 
 ## API Reference
