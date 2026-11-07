@@ -1,4 +1,4 @@
-import { InvestecApiError } from './errors';
+import { InvestecApiError, InvestecValidationError } from './errors';
 import type {
   AccountBalanceResponse,
   AccountDocumentResponse,
@@ -21,10 +21,60 @@ import type {
 
 /** Refresh tokens this many seconds before actual expiry. */
 const TOKEN_EXPIRY_SKEW_SECONDS = 60;
-const REQUEST_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_HOST = 'https://openapi.investec.com';
+const DEFAULT_RETRY_DELAY_MS = 500;
+/** Upper bound for any single retry wait, including a server's Retry-After. */
+const MAX_RETRY_DELAY_MS = 30_000;
+const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);
 
+/**
+ * Joins the host and an absolute API path, keeping any path prefix on the
+ * host (e.g. a reverse proxy at https://proxy.example/investec).
+ */
 const createEndpoint = (host: string, path: string) =>
-  new URL(path, host).toString();
+  new URL(`${host.replace(/\/+$/, '')}${path}`).toString();
+
+const sleep = (ms: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Throws InvestecValidationError naming the first empty argument. */
+function requireParams(params: Record<string, unknown>): void {
+  for (const [name, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') {
+      throw new InvestecValidationError(name);
+    }
+  }
+}
+
+/**
+ * Options for `new InvestecPbApi({...})`.
+ */
+export interface InvestecPbApiOptions {
+  clientId: string;
+  clientSecret: string;
+  apiKey: string;
+  /** API host. Defaults to Investec production, https://openapi.investec.com. */
+  host?: string;
+  /**
+   * fetch implementation to use, e.g. for proxies, logging or tests.
+   * Defaults to the global fetch at call time.
+   */
+  fetch?: typeof fetch;
+  /** Per-request timeout in milliseconds. Defaults to 30000. */
+  timeoutMs?: number;
+  /**
+   * How many times to retry a GET that fails with 429, 500, 502, 503 or 504,
+   * or with a network error or timeout. Payments and transfers are never
+   * retried. Defaults to 0 (no retries).
+   */
+  retries?: number;
+  /**
+   * Base delay before the first retry, doubled on each further attempt.
+   * A 429's Retry-After header is used instead when present. Defaults to 500.
+   */
+  retryDelayMs?: number;
+}
 
 /**
  * Main API client for Investec Private Banking programmable banking API.
@@ -39,12 +89,23 @@ export class InvestecPbApi {
   private readonly clientId: string;
   private readonly clientSecret: string;
   private readonly apiKey: string;
+  private readonly fetchImpl: typeof fetch | undefined;
+  private readonly timeoutMs: number;
+  private readonly retries: number;
+  private readonly retryDelayMs: number;
   private token: string | undefined;
   private expiresIn: Date = new Date(0);
   private refreshPromise: Promise<string> | null = null;
 
   /**
    * Create a new InvestecPbApi instance.
+   *
+   * @example
+   * new InvestecPbApi({ clientId, clientSecret, apiKey, retries: 2 });
+   * new InvestecPbApi(clientId, clientSecret, apiKey, host); // positional form
+   */
+  constructor(options: InvestecPbApiOptions);
+  /**
    * @param clientId OAuth client ID
    * @param clientSecret OAuth client secret
    * @param apiKey API key from Investec
@@ -54,12 +115,31 @@ export class InvestecPbApi {
     clientId: string,
     clientSecret: string,
     apiKey: string,
-    host: string = 'https://openapi.investec.com',
+    host?: string,
+  );
+  constructor(
+    optionsOrClientId: InvestecPbApiOptions | string,
+    clientSecret?: string,
+    apiKey?: string,
+    host?: string,
   ) {
-    this.host = host;
-    this.apiKey = apiKey;
-    this.clientId = clientId;
-    this.clientSecret = clientSecret;
+    const options: InvestecPbApiOptions =
+      typeof optionsOrClientId === 'string'
+        ? {
+            clientId: optionsOrClientId,
+            clientSecret: clientSecret as string,
+            apiKey: apiKey as string,
+            host,
+          }
+        : optionsOrClientId;
+    this.clientId = options.clientId;
+    this.clientSecret = options.clientSecret;
+    this.apiKey = options.apiKey;
+    this.host = options.host ?? DEFAULT_HOST;
+    this.fetchImpl = options.fetch;
+    this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.retries = Math.max(0, Math.floor(options.retries ?? 0));
+    this.retryDelayMs = options.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS;
   }
 
   /**
@@ -94,15 +174,10 @@ export class InvestecPbApi {
    */
   async getAccessToken(): Promise<AuthResponse> {
     const endpoint = createEndpoint(this.host, `/identity/v2/oauth2/token`);
-    const response = await fetch(endpoint, {
+    const response = await this.send(endpoint, {
       method: 'POST',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
-        Authorization:
-          'Basic ' +
-          Buffer.from(`${this.clientId}:${this.clientSecret}`).toString(
-            'base64',
-          ),
+        Authorization: `Basic ${btoa(`${this.clientId}:${this.clientSecret}`)}`,
         'x-api-key': this.apiKey,
         'content-type': 'application/x-www-form-urlencoded',
       },
@@ -113,11 +188,14 @@ export class InvestecPbApi {
       throw await this.toApiError(response, endpoint);
     }
 
-    const result = (await response.json()) as AuthResponse;
+    const raw = (await response.json()) as AuthResponse;
+    // Some servers send expires_in as a string; normalise it.
+    const result: AuthResponse = { ...raw, expires_in: Number(raw.expires_in) };
     this.token = result.access_token;
     this.expiresIn = new Date(
       Date.now() +
-        Math.max(result.expires_in - TOKEN_EXPIRY_SKEW_SECONDS, 0) * 1000,
+        Math.max((result.expires_in || 0) - TOKEN_EXPIRY_SKEW_SECONDS, 0) *
+          1000,
     );
     return result;
   }
@@ -127,22 +205,26 @@ export class InvestecPbApi {
    * @param accountId The account ID to transfer from
    * @param transfers One or more transfer instructions
    * @returns TransferResponse
-   * @throws Error if parameters are missing or API call fails
+   * @throws InvestecValidationError if a parameter is missing or the list is empty
+   * @throws InvestecApiError if the API call fails
    */
   async transferMultiple(
     accountId: string,
     transfers: TransferMultiple[] | TransferMultiple,
   ): Promise<TransferResponse> {
-    if (!accountId || !transfers) {
-      throw new Error('Missing required parameters');
+    requireParams({ accountId, transfers });
+    const transferList = Array.isArray(transfers) ? transfers : [transfers];
+    if (transferList.length === 0) {
+      throw new InvestecValidationError(
+        'transfers',
+        'transfers must contain at least one transfer',
+      );
     }
     const endpoint = createEndpoint(
       this.host,
       `/za/pb/v1/accounts/${encodeURIComponent(accountId)}/transfermultiple`,
     );
-    const payload = {
-      transferList: Array.isArray(transfers) ? transfers : [transfers],
-    };
+    const payload = { transferList };
     return this.fetchPost<TransferResponse>(endpoint, payload);
   }
 
@@ -151,22 +233,26 @@ export class InvestecPbApi {
    * @param accountId The account ID to pay from
    * @param payments One or more payment instructions
    * @returns TransferResponse
-   * @throws Error if parameters are missing or API call fails
+   * @throws InvestecValidationError if a parameter is missing or the list is empty
+   * @throws InvestecApiError if the API call fails
    */
   async payMultiple(
     accountId: string,
     payments: PayMultiple[] | PayMultiple,
   ): Promise<TransferResponse> {
-    if (!accountId || !payments) {
-      throw new Error('Missing required parameters');
+    requireParams({ accountId, payments });
+    const paymentList = Array.isArray(payments) ? payments : [payments];
+    if (paymentList.length === 0) {
+      throw new InvestecValidationError(
+        'payments',
+        'payments must contain at least one payment',
+      );
     }
     const endpoint = createEndpoint(
       this.host,
       `/za/pb/v1/accounts/${encodeURIComponent(accountId)}/paymultiple`,
     );
-    const payload = {
-      paymentList: Array.isArray(payments) ? payments : [payments],
-    };
+    const payload = { paymentList };
     return this.fetchPost<TransferResponse>(endpoint, payload);
   }
 
@@ -198,9 +284,7 @@ export class InvestecPbApi {
    * @throws Error if accountId is missing or API call fails
    */
   async getAccountBalances(accountId: string): Promise<AccountBalanceResponse> {
-    if (!accountId) {
-      throw new Error('Missing required parameters');
-    }
+    requireParams({ accountId });
     const endpoint = createEndpoint(
       this.host,
       `/za/pb/v1/accounts/${encodeURIComponent(accountId)}/balance`,
@@ -244,9 +328,7 @@ export class InvestecPbApi {
       AccountTransaction | AccountTransactionWithPending
     >
   > {
-    if (!accountId) {
-      throw new Error('Missing required parameters');
-    }
+    requireParams({ accountId });
     const query: TransactionQuery =
       queryOrFromDate !== null && typeof queryOrFromDate === 'object'
         ? queryOrFromDate
@@ -271,9 +353,7 @@ export class InvestecPbApi {
   async getPendingTransactions(
     accountId: string,
   ): Promise<PendingTransactionResponse> {
-    if (!accountId) {
-      throw new Error('Missing required parameters');
-    }
+    requireParams({ accountId });
     return this.fetchGet(
       this.accountEndpoint(accountId, '/pending-transactions'),
     );
@@ -292,9 +372,7 @@ export class InvestecPbApi {
    * @throws Error if profileId is missing or API call fails
    */
   async getProfileAccounts(profileId: string): Promise<ProfileAccountResponse> {
-    if (!profileId) {
-      throw new Error('Missing required parameters');
-    }
+    requireParams({ profileId });
     return this.fetchGet(this.profileEndpoint(profileId, '/accounts'));
   }
 
@@ -308,9 +386,7 @@ export class InvestecPbApi {
     profileId: string,
     accountId: string,
   ): Promise<BeneficiaryResponse> {
-    if (!profileId || !accountId) {
-      throw new Error('Missing required parameters');
-    }
+    requireParams({ profileId, accountId });
     return this.fetchGet(
       this.profileEndpoint(
         profileId,
@@ -330,9 +406,7 @@ export class InvestecPbApi {
     profileId: string,
     accountId: string,
   ): Promise<AuthorisationSetupDetailsResponse> {
-    if (!profileId || !accountId) {
-      throw new Error('Missing required parameters');
-    }
+    requireParams({ profileId, accountId });
     return this.fetchGet(
       this.profileEndpoint(
         profileId,
@@ -363,9 +437,7 @@ export class InvestecPbApi {
     fromDate: string,
     toDate: string,
   ): Promise<AccountDocumentResponse> {
-    if (!accountId || !fromDate || !toDate) {
-      throw new Error('Missing required parameters');
-    }
+    requireParams({ accountId, fromDate, toDate });
     return this.fetchGet(
       this.accountEndpoint(
         accountId,
@@ -389,9 +461,7 @@ export class InvestecPbApi {
     documentType: string,
     documentDate: string,
   ): Promise<ArrayBuffer> {
-    if (!accountId || !documentType || !documentDate) {
-      throw new Error('Missing required parameters');
-    }
+    requireParams({ accountId, documentType, documentDate });
     const endpoint = this.accountEndpoint(
       accountId,
       `/document/${encodeURIComponent(documentType)}/${encodeURIComponent(
@@ -436,28 +506,61 @@ export class InvestecPbApi {
     });
   }
 
+  /**
+   * Sends an authorized request and parses the JSON body. An empty body
+   * (e.g. 204 No Content) resolves to undefined.
+   */
   private async authorizedRequest<T>(
     endpoint: string,
     init: RequestInit,
   ): Promise<T> {
     const response = await this.authorizedFetch(endpoint, init);
-    return (await response.json()) as T;
+    const text = await response.text();
+    return (text ? JSON.parse(text) : undefined) as T;
   }
 
-  /** Sends an authorized request, retrying once on 401; throws on non-2xx. */
+  /**
+   * Sends an authorized request, refreshing the token and retrying once on
+   * 401, and retrying GETs on transient failures when `retries` is set.
+   * Throws InvestecApiError on any other non-2xx response.
+   */
   private async authorizedFetch(
     endpoint: string,
     init: RequestInit,
   ): Promise<Response> {
-    let response = await this.sendAuthorized(endpoint, init);
-    if (response.status === 401) {
-      this.invalidateToken();
-      response = await this.sendAuthorized(endpoint, init);
-    }
-    if (!response.ok) {
+    const canRetry = init.method === 'GET';
+    for (let attempt = 0; ; attempt++) {
+      const retriesLeft = canRetry && attempt < this.retries;
+      let response: Response;
+      try {
+        response = await this.sendAuthorized(endpoint, init);
+        if (response.status === 401) {
+          this.invalidateToken();
+          response = await this.sendAuthorized(endpoint, init);
+        }
+      } catch (error) {
+        if (!retriesLeft || error instanceof InvestecApiError) throw error;
+        await sleep(this.retryDelay(attempt));
+        continue;
+      }
+      if (response.ok) return response;
+      if (retriesLeft && RETRYABLE_STATUSES.has(response.status)) {
+        await response.body?.cancel().catch(() => {});
+        await sleep(this.retryDelay(attempt, response));
+        continue;
+      }
       throw await this.toApiError(response, endpoint);
     }
-    return response;
+  }
+
+  /** Exponential backoff, or the server's Retry-After (seconds) on a 429. */
+  private retryDelay(attempt: number, response?: Response): number {
+    const retryAfter = Number(response?.headers.get('retry-after'));
+    const delay =
+      response?.status === 429 && retryAfter > 0
+        ? retryAfter * 1000
+        : this.retryDelayMs * 2 ** attempt;
+    return Math.min(delay, MAX_RETRY_DELAY_MS);
   }
 
   private async sendAuthorized(
@@ -465,14 +568,22 @@ export class InvestecPbApi {
     init: RequestInit,
   ): Promise<Response> {
     const token = await this.getToken();
-    return fetch(endpoint, {
+    return this.send(endpoint, {
       ...init,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       headers: {
         Authorization: `Bearer ${token}`,
         'content-type': 'application/json',
         ...(init.headers ?? {}),
       },
+    });
+  }
+
+  /** fetch with the configured implementation and per-request timeout. */
+  private send(endpoint: string, init: RequestInit): Promise<Response> {
+    const doFetch = this.fetchImpl ?? globalThis.fetch;
+    return doFetch(endpoint, {
+      ...init,
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
   }
 

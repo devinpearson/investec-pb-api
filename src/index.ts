@@ -1,5 +1,8 @@
-export { InvestecApiError } from './errors';
-export { InvestecPbApi } from './investec-pb-api';
+export { InvestecApiError, InvestecValidationError } from './errors';
+export {
+  InvestecPbApi,
+  type InvestecPbApiOptions,
+} from './investec-pb-api';
 export type {
   Account,
   AccountBalance,

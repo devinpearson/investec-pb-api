@@ -38,16 +38,27 @@ npm install investec-pb-api
 ```typescript
 import { InvestecPbApi } from 'investec-pb-api';
 
-const pb = new InvestecPbApi('<clientId>', '<clientSecret>', '<apiKey>');
+const pb = new InvestecPbApi({
+  clientId: '<clientId>',
+  clientSecret: '<clientSecret>',
+  apiKey: '<apiKey>',
+});
 
-// Optional: use the Investec sandbox host
-// const pb = new InvestecPbApi(
-//   '<clientId>',
-//   '<clientSecret>',
-//   '<apiKey>',
-//   'https://openapisandbox.investec.com',
-// );
+// The positional form still works:
+// new InvestecPbApi('<clientId>', '<clientSecret>', '<apiKey>', host);
 ```
+
+All options:
+
+| Option         | Default                       | What it does                                                                                              |
+| -------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `host`         | `https://openapi.investec.com` | API host. Use `https://openapisandbox.investec.com` for the sandbox. A path prefix (for a proxy) is kept. |
+| `fetch`        | global `fetch`                | Your own fetch, for proxies, logging or tests.                                                            |
+| `timeoutMs`    | `30000`                       | Per-request timeout.                                                                                      |
+| `retries`      | `0`                           | Retries for GETs that fail with 429, 500, 502, 503, 504 or a network error. Payments and transfers are never retried. |
+| `retryDelayMs` | `500`                         | First retry delay, doubled each attempt. A 429's `Retry-After` is used when present. Capped at 30 s.      |
+
+The client uses only `fetch`, `btoa` and `AbortSignal`, so it runs on Node 18+, Bun, Deno and edge runtimes.
 
 ### Fetch Accounts
 
@@ -162,16 +173,18 @@ All methods are fully typed. See the [src/types.ts](src/types.ts) file for detai
 
 ### Error Handling
 
-API failures throw `InvestecApiError` with `status`, `endpoint`, and optional `body`. Validation failures throw a plain `Error`. Use try/catch to handle errors:
+API failures throw `InvestecApiError` with `status`, `endpoint`, and optional `body`. A missing argument, or an empty payment or transfer list, throws `InvestecValidationError` before any request is sent; its `parameter` names the argument.
 
 ```typescript
-import { InvestecApiError } from 'investec-pb-api';
+import { InvestecApiError, InvestecValidationError } from 'investec-pb-api';
 
 try {
   const accounts = await pb.getAccounts();
 } catch (err) {
   if (err instanceof InvestecApiError) {
     console.error(err.status, err.endpoint, err.body);
+  } else if (err instanceof InvestecValidationError) {
+    console.error('Bad argument:', err.parameter);
   } else {
     console.error('API error:', err);
   }
