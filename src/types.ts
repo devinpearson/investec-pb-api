@@ -88,23 +88,28 @@ export interface AccountTransaction {
 
 /**
  * Represents a single beneficiary for payments.
+ * Fields typed `| null` are returned as null by the API when not captured.
  */
 export interface Beneficiary {
   beneficiaryId: string;
   accountNumber: string;
   code: string;
   bank: string;
-  beneficiaryName: string;
+  beneficiaryName: string | null;
   lastPaymentAmount: string;
   lastPaymentDate: string;
-  cellNo: string;
-  emailAddress: string;
+  cellNo: string | null;
+  emailAddress: string | null;
   name: string;
   referenceAccountNumber: string;
-  referenceName: string;
+  referenceName: string | null;
   categoryId: string;
   profileId: string;
-  fasterPaymentAllowed: boolean;
+  /** Not returned by every beneficiary endpoint. */
+  fasterPaymentAllowed?: boolean;
+  /** e.g. "PERSONALEXTERNAL". */
+  beneficiaryType?: string;
+  approvedBeneficiaryCategory?: string | null;
 }
 
 /**
@@ -118,11 +123,140 @@ export interface BeneficiaryResponse {
 
 /**
  * API response for a list of transactions on an account.
+ * `T` is `AccountTransactionWithPending` when `includePending` is requested.
  */
-export interface AccountTransactionResponse {
+export interface AccountTransactionResponse<T = AccountTransaction> {
   data: {
-    transactions: AccountTransaction[];
+    transactions: T[];
   };
+  links?: ApiLinks;
+  meta?: ApiMeta;
+}
+
+/**
+ * A transaction from the transactions endpoint with `includePending=true`.
+ * Pending items have no posting details, so those fields are null.
+ */
+export type AccountTransactionWithPending = Omit<
+  AccountTransaction,
+  'transactionType' | 'postingDate' | 'valueDate' | 'actionDate'
+> & {
+  transactionType: string | null;
+  postingDate: string | null;
+  valueDate: string | null;
+  actionDate: string | null;
+};
+
+/**
+ * Filters for `getAccountTransactions`. Dates are YYYY-MM-DD.
+ */
+export interface TransactionQuery {
+  fromDate?: string | null;
+  toDate?: string | null;
+  transactionType?: string | null;
+  /** Include card authorisations that have not posted yet. */
+  includePending?: boolean;
+}
+
+/**
+ * A pending (not yet posted) transaction, from the pending-transactions
+ * endpoint. Only the properties known before posting are returned.
+ */
+export interface PendingTransaction {
+  accountId: string;
+  type: string;
+  status: string;
+  description: string;
+  transactionDate: string;
+  amount: number;
+}
+
+export interface PendingTransactionResponse {
+  data: {
+    transactions: PendingTransaction[];
+  };
+  links?: ApiLinks;
+  meta?: ApiMeta;
+}
+
+/**
+ * A banking profile. Accounts and beneficiaries belong to a profile.
+ */
+export interface Profile {
+  profileId: string;
+  profileName: string;
+  defaultProfile: boolean;
+}
+
+export interface ProfileResponse {
+  data: Profile[];
+  links?: ApiLinks;
+  meta?: ApiMeta;
+}
+
+/** API response for the accounts in one profile. */
+export interface ProfileAccountResponse {
+  data: Account[];
+  links?: ApiLinks;
+  meta?: ApiMeta;
+}
+
+/**
+ * A beneficiary category. The API returns these fields in PascalCase and
+ * `DefaultCategory` as the string "true" or "false".
+ */
+export interface BeneficiaryCategory {
+  CategoryId: string;
+  DefaultCategory: string;
+  CategoryName: string;
+}
+
+export interface BeneficiaryCategoryResponse {
+  data: BeneficiaryCategory[];
+  links?: ApiLinks;
+  meta?: ApiMeta;
+}
+
+/**
+ * A document (statement, tax certificate, ...) available for an account.
+ * Pass both fields to `getDocument` to download it.
+ */
+export interface AccountDocument {
+  /** e.g. "Statement" or "TaxCertificate". */
+  documentType: string;
+  /** YYYY-MM-DD */
+  documentDate: string;
+}
+
+export interface AccountDocumentResponse {
+  data: AccountDocument[];
+  links?: ApiLinks;
+  meta?: ApiMeta;
+}
+
+export interface Authoriser {
+  authoriserId: string;
+  name: string;
+}
+
+export interface AuthorisationPeriod {
+  id: string;
+  description: string;
+}
+
+/**
+ * Who has to authorise payments on an account, and within which periods.
+ */
+export interface AuthorisationSetupDetails {
+  /** A number as a string, e.g. "2". */
+  numberOfAuthorisationRequired: string;
+  period: AuthorisationPeriod[];
+  authorisersListA: Authoriser[];
+  authorisersListB: Authoriser[];
+}
+
+export interface AuthorisationSetupDetailsResponse {
+  data: AuthorisationSetupDetails;
   links?: ApiLinks;
   meta?: ApiMeta;
 }

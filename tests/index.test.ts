@@ -63,6 +63,16 @@ describe('InvestecApiError', () => {
     expect(error.message).toBe('Investec API request failed (403): Forbidden');
   });
 
+  test('falls back to statusText when body is only whitespace', () => {
+    const error = new InvestecApiError(
+      404,
+      'https://example/x',
+      'Not Found',
+      '   ',
+    );
+    expect(error.message).toBe('Investec API request failed (404): Not Found');
+  });
+
   test('omits detail when body and statusText are empty', () => {
     const error = new InvestecApiError(418, 'https://example/x', '');
     expect(error.message).toBe('Investec API request failed (418)');
@@ -141,6 +151,20 @@ describe('InvestecPbApi', () => {
     ).rejects.toThrow('Missing required parameters');
   });
 
+  test('transferMultiple throws when only accountId is missing', async () => {
+    const fetchMock = setupFetch();
+    const pb = new InvestecPbApi('id', 'secret', 'key');
+    await expect(
+      pb.transferMultiple('', {
+        beneficiaryAccountId: 'b',
+        amount: '1.00',
+        myReference: 'm',
+        theirReference: 't',
+      }),
+    ).rejects.toThrow('Missing required parameters');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   test('getAccessToken posts to identity endpoint and stores token', async () => {
     const fetchMock = setupFetch(jsonResponse(authResponse()));
     const pb = new InvestecPbApi('id', 'secret', 'key', HOST);
@@ -153,8 +177,11 @@ describe('InvestecPbApi', () => {
     expect(init.method).toBe('POST');
     expect(init.body).toBe('grant_type=client_credentials');
     expect(init.headers['x-api-key']).toBe('key');
+    expect(init.headers['content-type']).toBe(
+      'application/x-www-form-urlencoded',
+    );
     expect(init.headers.Authorization).toBe(
-      'Basic ' + Buffer.from('id:secret').toString('base64'),
+      `Basic ${Buffer.from('id:secret').toString('base64')}`,
     );
   });
 
@@ -208,6 +235,8 @@ describe('InvestecPbApi', () => {
     const [url, init] = fetchMock.mock.calls[1]!;
     expect(url).toBe(`${HOST}/za/pb/v1/accounts`);
     expect(init.headers.Authorization).toBe('Bearer test-token');
+    expect(init.method).toBe('GET');
+    expect(init.headers['content-type']).toBe('application/json');
   });
 
   test('getAccountBalances encodes accountId and returns balance', async () => {
@@ -305,6 +334,20 @@ describe('InvestecPbApi', () => {
     expect(url.searchParams.get('fromDate')).toBe('2024-01-01');
     expect(url.searchParams.has('toDate')).toBe(false);
     expect(url.searchParams.has('transactionType')).toBe(false);
+  });
+
+  test('getAccountTransactions omits fromDate when only toDate is given', async () => {
+    const fetchMock = setupFetch(
+      jsonResponse(authResponse()),
+      jsonResponse({ data: { transactions: [] } }),
+    );
+
+    const pb = new InvestecPbApi('id', 'secret', 'key', HOST);
+    await pb.getAccountTransactions('acc-1', null, '2024-02-01');
+
+    const url = new URL(String(fetchMock.mock.calls[1]![0]));
+    expect(url.searchParams.has('fromDate')).toBe(false);
+    expect(url.searchParams.get('toDate')).toBe('2024-02-01');
   });
 
   test('getBeneficiaries returns beneficiary list', async () => {
@@ -503,6 +546,29 @@ describe('InvestecPbApi', () => {
     expect(fetchMock.mock.calls[4]![0]).toBe(
       `${HOST}/identity/v2/oauth2/token`,
     );
+  });
+
+  test('keeps a token for expires_in minus the skew, in seconds', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = setupFetch(
+        jsonResponse(authResponse(3600, 'first')),
+        jsonResponse(authResponse(3600, 'second')),
+      );
+      const pb = new InvestecPbApi('id', 'secret', 'key', HOST);
+      expect(await pb.getToken()).toBe('first');
+
+      // 3600s - 60s skew = 3540s of validity
+      vi.advanceTimersByTime(3539 * 1000);
+      expect(await pb.getToken()).toBe('first');
+      expect(fetchMock).toHaveBeenCalledOnce();
+
+      vi.advanceTimersByTime(2 * 1000);
+      expect(await pb.getToken()).toBe('second');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test('coalesces concurrent token refreshes', async () => {

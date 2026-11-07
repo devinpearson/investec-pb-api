@@ -17,7 +17,10 @@ This package was created to support the investec-ipb command line application, b
 - OAuth2 authentication (client credentials)
 - Fetch accounts, balances, and transactions
 - Make payments and transfers (single or multiple)
-- Manage beneficiaries
+- List beneficiaries and beneficiary categories
+- Profiles, profile accounts and payment authorisation setup
+- Pending transactions
+- List and download statements and other account documents
 - Fully typed responses and request payloads
 
 ## Installation
@@ -35,16 +38,27 @@ npm install investec-pb-api
 ```typescript
 import { InvestecPbApi } from 'investec-pb-api';
 
-const pb = new InvestecPbApi('<clientId>', '<clientSecret>', '<apiKey>');
+const pb = new InvestecPbApi({
+  clientId: '<clientId>',
+  clientSecret: '<clientSecret>',
+  apiKey: '<apiKey>',
+});
 
-// Optional: use the Investec sandbox host
-// const pb = new InvestecPbApi(
-//   '<clientId>',
-//   '<clientSecret>',
-//   '<apiKey>',
-//   'https://openapisandbox.investec.com',
-// );
+// The positional form still works:
+// new InvestecPbApi('<clientId>', '<clientSecret>', '<apiKey>', host);
 ```
+
+All options:
+
+| Option         | Default                       | What it does                                                                                              |
+| -------------- | ----------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `host`         | `https://openapi.investec.com` | API host. Use `https://openapisandbox.investec.com` for the sandbox. A path prefix (for a proxy) is kept. |
+| `fetch`        | global `fetch`                | Your own fetch, for proxies, logging or tests.                                                            |
+| `timeoutMs`    | `30000`                       | Per-request timeout.                                                                                      |
+| `retries`      | `0`                           | Retries for GETs that fail with 429, 500, 502, 503, 504 or a network error. Payments and transfers are never retried. |
+| `retryDelayMs` | `500`                         | First retry delay, doubled each attempt. A 429's `Retry-After` is used when present. Capped at 30 s.      |
+
+The client uses only `fetch`, `btoa` and `AbortSignal`, so it runs on Node 18+, Bun, Deno and edge runtimes.
 
 ### Fetch Accounts
 
@@ -109,22 +123,68 @@ const beneficiaries = await pb.getBeneficiaries();
 console.log(beneficiaries.data);
 ```
 
+### Pending Transactions
+
+```typescript
+// Only the pending (authorised, not yet posted) items
+const pending = await pb.getPendingTransactions(accountId);
+
+// Posted and pending together; pending items have null posting fields
+const all = await pb.getAccountTransactions(accountId, {
+  fromDate: '2024-01-01',
+  includePending: true,
+});
+```
+
+### Profiles
+
+```typescript
+const profiles = await pb.getProfiles();
+const profileId = profiles.data.find((p) => p.defaultProfile)!.profileId;
+
+const accounts = await pb.getProfileAccounts(profileId);
+const beneficiaries = await pb.getProfileBeneficiaries(profileId, accountId);
+const authorisation = await pb.getAuthorisationSetupDetails(
+  profileId,
+  accountId,
+);
+```
+
+### Beneficiary Categories
+
+```typescript
+const categories = await pb.getBeneficiaryCategories();
+```
+
+### Statements and Documents
+
+```typescript
+import { writeFile } from 'node:fs/promises';
+
+const docs = await pb.getDocuments(accountId, '2024-01-01', '2024-12-31');
+const { documentType, documentDate } = docs.data[0]!;
+const pdf = await pb.getDocument(accountId, documentType, documentDate);
+await writeFile(`${documentType}-${documentDate}.pdf`, new Uint8Array(pdf));
+```
+
 ## API Reference
 
 All methods are fully typed. See the [src/types.ts](src/types.ts) file for detailed type definitions.
 
 ### Error Handling
 
-API failures throw `InvestecApiError` with `status`, `endpoint`, and optional `body`. Validation failures throw a plain `Error`. Use try/catch to handle errors:
+API failures throw `InvestecApiError` with `status`, `endpoint`, and optional `body`. A missing argument, or an empty payment or transfer list, throws `InvestecValidationError` before any request is sent; its `parameter` names the argument.
 
 ```typescript
-import { InvestecApiError } from 'investec-pb-api';
+import { InvestecApiError, InvestecValidationError } from 'investec-pb-api';
 
 try {
   const accounts = await pb.getAccounts();
 } catch (err) {
   if (err instanceof InvestecApiError) {
     console.error(err.status, err.endpoint, err.body);
+  } else if (err instanceof InvestecValidationError) {
+    console.error('Bad argument:', err.parameter);
   } else {
     console.error('API error:', err);
   }
@@ -317,6 +377,38 @@ Runnable examples live in [`examples/`](examples/). See [`examples/README.md`](e
 > Tip: Prefer the sandbox host while experimenting. Amounts are rand strings (e.g. `"1.00"`), not cents.
 
 ---
+
+## Development
+
+| Command                    | What it does                                             |
+| -------------------------- | -------------------------------------------------------- |
+| `npm test`                 | Unit tests (mocked `fetch`)                              |
+| `npm run test:integration` | End-to-end tests against `programmable-banking-sim`      |
+| `npm run test:mutation`    | Stryker mutation testing; report in `reports/mutation/`  |
+| `npm run lint`             | Biome lint + format check (`npm run lint:fix` to fix)    |
+| `npm run ci`               | Build, typecheck, lint and check package exports         |
+
+### Integration tests
+
+The integration suite runs the client against [programmable-banking-sim](https://github.com/devinpearson/programmable-banking-sim).
+It is skipped unless `PB_SIM_URL` is set:
+
+```bash
+# in programmable-banking-sim
+PORT=3000 npm run dev
+```
+
+```bash
+PB_SIM_URL=http://localhost:3000 npm run test:integration
+```
+
+The default credentials are the simulator's seeded sandbox values; override
+them with `PB_SIM_CLIENT_ID`, `PB_SIM_CLIENT_SECRET` and `PB_SIM_API_KEY`.
+The tests create real transactions in the simulator's database (descriptions
+start with `it-`), so run them against a throwaway copy if you care about its
+state. Two tests are marked `test.fails` because the simulator's beneficiary
+and transfer responses don't match the real API yet; flip them to `test` once
+the simulator is fixed.
 
 ## License
 
